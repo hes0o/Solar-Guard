@@ -14,15 +14,20 @@ python3 -m venv .venv
 ## Run the website
 
 ```bash
-.venv/bin/uvicorn solarguard.web:app --port 8000
+cp .env.example .env        # then set the two passwords and a random SOLARGUARD_SECRET
+scripts/run.sh              # http://localhost:8000  (HOST=0.0.0.0 PORT=... to change)
 ```
 
-Open http://localhost:8000
+Log in as **manager** or **staff** with the passwords from `.env`. If they are unset, random ones are printed
+in the server log at start-up.
+
+The simulation, settings, tasks, notifications and history are saved in `out/solarguard.db`, so a restart
+continues where it stopped. Delete that file to start a fresh simulation.
 
 | Page | What it shows |
 |---|---|
-| `/` Manager | 6 simulated panels (live camera frame, click for the dirt overlay), power, kWh/₺ lost, Manual/Auto mode, approvals, history chart, settings |
-| `/staff` | Cleaning/inspection tasks (start → done) and notifications. Done cleans the virtual panel. |
+| `/` Manager (manager only) | 6 simulated panels (live camera frame, click for the dirt overlay), power, kWh/₺ lost, Manual/Auto mode, approvals, history chart, settings |
+| `/staff` (both roles) | Cleaning/inspection tasks (start → done) and notifications. Done cleans the virtual panel. |
 | `/dataset` | Accuracy on the Kaggle set (dev/test split), confusion matrix, every image with its overlay |
 | `/try` | Upload any photo and see each pipeline step |
 

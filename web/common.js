@@ -1,16 +1,22 @@
 // Shared helpers for all pages.
 const NAV = [["/", "Manager"], ["/staff", "Staff"], ["/dataset", "Dataset Mode"], ["/try", "Try an image"]];
 
-function renderNav(extra = "") {
+async function renderNav(extra = "") {
+  // Build synchronously so pages can find the elements in `extra` right away; links arrive once the role is known.
   const nav = document.createElement("nav");
-  nav.innerHTML = `<span class="brand">☀ SolarGuard</span>` +
-    NAV.map(([h, t]) => `<a href="${h}" class="${location.pathname === h ? "active" : ""}">${t}</a>`).join("") +
-    `<span class="spacer"></span>${extra}`;
+  nav.innerHTML = `<span class="brand">☀ SolarGuard</span><span id="links" style="display:contents"></span>` +
+    `<span class="spacer"></span>${extra}<span class="muted" id="role"></span><button id="logout">Log out</button>`;
   document.body.prepend(nav);
+  document.getElementById("logout").onclick = async () => { await post("/api/logout"); location.href = "/login"; };
+  const { role } = await api("/api/me");
+  document.getElementById("role").textContent = role;
+  document.getElementById("links").innerHTML = NAV.filter(([h]) => role === "manager" || h !== "/")
+    .map(([h, t]) => `<a href="${h}" class="${location.pathname === h ? "active" : ""}">${t}</a>`).join("");
 }
 
 async function api(path, opts = {}) {
   const r = await fetch(path, opts);
+  if (r.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); throw new Error("please log in"); }
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(body.detail || r.statusText);
   return body;

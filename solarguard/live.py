@@ -3,6 +3,7 @@
 One Live object owns all state. tick() advances the simulated clock; the web
 layer calls it from a background loop and reads state through snapshot().
 """
+import json
 import sqlite3
 import threading
 from datetime import datetime, timedelta
@@ -20,15 +21,29 @@ create table if not exists readings(id integer primary key, panel text, t text, 
 create table if not exists tasks(id integer primary key, panel text, kind text, status text, reason text,
     created text, updated text);
 create table if not exists notifications(id integer primary key, role text, text text, t text, read int default 0);
+create table if not exists sim_state(id integer primary key check (id = 1), data text);
+create index if not exists readings_panel on readings(panel, id);
 """
 
 
+def saved_state(db_path):
+    """The last saved simulation snapshot in db_path, or None (fresh start)."""
+    db = sqlite3.connect(db_path)
+    try:
+        db.executescript(SCHEMA)
+        row = db.execute("select data from sim_state where id=1").fetchone()
+        return json.loads(row[0]) if row else None
+    finally:
+        db.close()
+
+
 class Live:
-    def __init__(self, bases, db_path=":memory:", seed=0, start=datetime(2026, 6, 1, 6, 0)):
+    def __init__(self, bases, db_path=":memory:", seed=0, start=datetime(2026, 6, 1, 6, 0), base_ids=None):
+        """bases: clean images, one per panel. base_ids: where they came from, saved so a restart reuses them."""
         rng = np.random.default_rng(seed)
         self.twins = {f"P-{i + 1:02d}": Twin(f"P-{i + 1:02d}", b, rng) for i, b in enumerate(bases)}
+        self.base_ids = base_ids or []
         self.t = start
-        # shortcut: settings live in memory and reset on restart; persist them if that starts to matter.
         self.settings = {"mode": "manual", "minutes_per_tick": 30, "tick_seconds": 3, "k": 3,
                          "cooldown_hours": 24, "price_tl_kwh": 3.0}
         self.state = {pid: {"streak": 0, "kind": None, "cooldown_until": start, "last": None,
@@ -37,7 +52,34 @@ class Live:
         self.lock = threading.Lock()
         self.db = sqlite3.connect(db_path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
+        if db_path != ":memory:":
+            self.db.execute("pragma journal_mode=wal")
         self.db.executescript(SCHEMA)
+
+    # ---- persistence ---------------------------------------------------------
+    KEEP = ("streak", "kind", "lost_kwh")
+
+    def _save(self):
+        """Write clock, settings, twins and decision state; caller holds the lock and commits."""
+        data = {"t": self.t.isoformat(), "settings": self.settings, "base_ids": self.base_ids,
+                "panels": {pid: {**{k: st[k] for k in self.KEEP}, "cooldown_until": st["cooldown_until"].isoformat(),
+                                 "dust": tw.dust, "drops": tw.drops, "dust_per_day": tw.dust_per_day}
+                           for (pid, st), tw in zip(self.state.items(), self.twins.values())}}
+        self.db.execute("insert or replace into sim_state(id, data) values(1, ?)", (json.dumps(data),))
+
+    def restore(self, data):
+        """Continue from a saved snapshot (see saved_state)."""
+        with self.lock:
+            self.t = datetime.fromisoformat(data["t"])
+            self.settings.update(data["settings"])
+            for pid, p in data["panels"].items():
+                if pid not in self.twins:
+                    continue
+                st, tw = self.state[pid], self.twins[pid]
+                st.update({k: p[k] for k in self.KEEP})
+                st["cooldown_until"] = datetime.fromisoformat(p["cooldown_until"])
+                tw.dust, tw.dust_per_day = p["dust"], p["dust_per_day"]
+                tw.drops = [tuple(d) for d in p["drops"]]
 
     # ---- simulation ---------------------------------------------------------
     def tick(self):
@@ -65,6 +107,7 @@ class Live:
                 self.db.execute("insert into readings(panel,t,irr,power,dirt,soiling,label) values(?,?,?,?,?,?,?)",
                                 (pid, iso(t), irr, power, res["features"]["dirt"], soiling, res["label"]))
                 self._decide(pid, res)
+            self._save()
             self.db.commit()
 
     # ---- FR11 decision engine ----------------------------------------------
@@ -116,21 +159,26 @@ class Live:
                     self.twins[pid].clean()
                     st["last"] = st["overlay"] = None   # old dirty reading no longer describes the panel
                 self._notify("manager", f"{pid}: {row['kind']} completed")
+            self._save()
             self.db.commit()
 
     def update_settings(self, new):
         allowed = {"mode": str, "minutes_per_tick": int, "tick_seconds": float, "k": int,
                    "cooldown_hours": int, "price_tl_kwh": float}
+        clean = {}
+        for key, val in new.items():                # validate everything before applying anything
+            if key not in allowed:
+                raise ValueError(f"unknown setting {key}")
+            val = allowed[key](val)
+            if key == "mode" and val not in ("manual", "auto"):
+                raise ValueError("mode must be manual or auto")
+            if key != "mode" and val <= 0:
+                raise ValueError(f"{key} must be > 0")
+            clean[key] = val
         with self.lock:
-            for key, val in new.items():
-                if key not in allowed:
-                    raise ValueError(f"unknown setting {key}")
-                val = allowed[key](val)
-                if key == "mode" and val not in ("manual", "auto"):
-                    raise ValueError("mode must be manual or auto")
-                if key != "mode" and val <= 0:
-                    raise ValueError(f"{key} must be > 0")
-                self.settings[key] = val
+            self.settings.update(clean)
+            self._save()
+            self.db.commit()
 
     def dirty_panel(self, pid, kind="dust"):
         """Demo helper: make one panel dusty, or drop a flock's worth of droppings on it, right now."""
@@ -143,6 +191,8 @@ class Live:
             else:
                 for _ in range(12):
                     tw.step(0, drop=True)
+            self._save()
+            self.db.commit()
 
     # ---- read side ------------------------------------------------------------
     def snapshot(self):

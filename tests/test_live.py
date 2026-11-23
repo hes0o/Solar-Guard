@@ -57,6 +57,38 @@ def test_auto_mode_goes_straight_to_staff(monkeypatch):
     assert lv.snapshot()["unread"] == {"manager": 0, "staff": 1}
 
 
+def test_state_survives_restart(monkeypatch, tmp_path):
+    db = str(tmp_path / "sg.db")
+    monkeypatch.setattr(live_mod, "analyze",
+                        lambda img, panel=None: ({"label": "Tozlu", "reason": "t", "features": {"dirt": 0.5}},
+                                                 {"panel": panel, "dirt": panel * 0, "glare": panel * 0}))
+    monkeypatch.setattr(live_mod, "overlay", lambda img, masks: img)
+    img = np.zeros((60, 80, 3), np.uint8)
+    lv = Live([img], db, start=datetime(2026, 6, 1, 11, 0), base_ids=["Clean/x.jpg"])
+    lv.update_settings({"mode": "auto", "k": 2})
+    lv.twins["P-01"].dust = 0.4
+    lv.tick()
+    lv.tick()                                     # second reading -> task created in auto mode
+    lv.db.close()
+
+    data = live_mod.saved_state(db)
+    assert data["base_ids"] == ["Clean/x.jpg"]
+    lv2 = Live([img], db)
+    lv2.restore(data)
+    assert lv2.t == lv.t and lv2.settings["mode"] == "auto" and lv2.settings["k"] == 2
+    assert lv2.twins["P-01"].dust == pytest.approx(lv.twins["P-01"].dust)
+    assert lv2.state["P-01"]["streak"] == 2
+    assert [t["status"] for t in lv2.snapshot()["tasks"]] == ["new"]
+    assert len(lv2.history("P-01")) == 2
+
+
+def test_bad_settings_change_nothing(monkeypatch):
+    lv = make(monkeypatch, [])
+    with pytest.raises(ValueError):
+        lv.update_settings({"k": 5, "mode": "turbo"})
+    assert lv.settings["k"] == 3
+
+
 def test_invalid_transition_and_settings_rejected(monkeypatch):
     lv = make(monkeypatch, ["Tozlu"] * 3)
     for _ in range(3):
