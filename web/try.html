@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SolarGuard — Try an image</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/common.js"></script>
+</head>
+<body>
+<main>
+  <label class="drop" id="drop">
+    <input type="file" accept="image/*" id="file" hidden>
+    Drop a solar panel photo here, or click to choose one (max 10 MB)
+  </label>
+  <div id="out"></div>
+</main>
+<script>
+renderNav();
+const F = { coverage: "Panel coverage", dirt: "Dirt ratio", snow: "White (snow) area", rust: "Brown/burn colour",
+  edges: "Edge density", blobs: "White blobs", sat: "Mean saturation", val: "Mean brightness", glcm: "GLCM contrast" };
+
+async function send(file) {
+  const fd = new FormData(); fd.append("file", file);
+  document.getElementById("out").innerHTML = `<p class="muted">Analyzing…</p>`;
+  try {
+    const r = await api("/api/analyze", { method: "POST", body: fd });
+    const step = (t, src) => `<div><div class="muted" style="margin-bottom:4px">${t}</div><img src="${src}" alt="${t}" style="width:100%;border-radius:6px"></div>`;
+    document.getElementById("out").innerHTML = `
+      <h2>Result</h2>
+      <div class="card"><div class="row-flex">${chip(r.label)} <span>${esc(r.reason)}</span></div></div>
+      <h2>Pipeline steps</h2>
+      <div class="grid">${step("1. Original", r.original)}${step("2. Panel ROI (colour + texture + convex hull)", r.panel_mask)}
+        ${step("3. Dirt mask (dirt index + threshold + morphology)", r.dirt_mask)}${step("4. Overlay", r.overlay)}</div>
+      <h2>Features</h2>
+      <div class="card"><table>${Object.entries(r.features).map(([k, v]) =>
+        `<tr><td>${F[k] || k}</td><td><b>${Number.isInteger(v) ? v : v.toFixed(3)}</b></td></tr>`).join("")}</table></div>`;
+  } catch (e) { document.getElementById("out").innerHTML = `<div class="card">⚠ ${esc(e.message)}</div>`; }
+}
+const drop = document.getElementById("drop");
+document.getElementById("file").onchange = e => e.target.files[0] && send(e.target.files[0]);
+drop.ondragover = e => e.preventDefault();
+drop.ondrop = e => { e.preventDefault(); e.dataTransfer.files[0] && send(e.dataTransfer.files[0]); };
+</script>
+</body>
+</html>

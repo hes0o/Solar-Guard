@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SolarGuard — Dataset Mode</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/common.js"></script>
+</head>
+<body>
+<main>
+  <p class="muted">Every Kaggle image is run through the same classical pipeline as Live Mode. Thresholds were read off the
+    <b>dev</b> half; the <b>test</b> half is the honest score. No machine learning is used.</p>
+  <div class="stats" id="stats"></div>
+
+  <h2>Confusion matrix — <select id="split"><option>test</option><option>dev</option></select>
+    <span class="muted" style="text-transform:none;letter-spacing:0">rows = true class, columns = predicted</span></h2>
+  <div class="card"><table class="cm" id="cm"></table></div>
+
+  <h2>Images</h2>
+  <div class="row-flex" style="margin-bottom:12px">
+    <select id="fClass"><option value="">All classes</option></select>
+    <select id="fRes"><option value="">All</option><option value="wrong">Wrong only</option><option value="right">Right only</option></select>
+    <span class="muted" id="count"></span>
+    <button id="more">Show more</button>
+  </div>
+  <div class="thumbs" id="thumbs"></div>
+</main>
+
+<div class="modal" id="modal" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="card">
+    <div class="head row-flex" style="justify-content:space-between;margin-bottom:10px">
+      <b id="mTitle"></b><button onclick="document.getElementById('modal').classList.remove('show')">Close</button></div>
+    <div class="pair"><img id="mRaw" alt="original"><img id="mOv" alt="pipeline overlay"></div>
+    <p id="mInfo"></p>
+  </div>
+</div>
+
+<script>
+renderNav();
+let D = null, shown = 48;
+
+function stats() {
+  const s = D.summary;
+  document.getElementById("stats").innerHTML = [
+    ["Images", s.dev.n + s.test.n],
+    ["5-class accuracy (test)", pct(s.test.accuracy)],
+    ["Clean vs needs-cleaning (test)", pct(s.test.binary_accuracy)],
+    ["5-class accuracy (dev)", pct(s.dev.accuracy)],
+    ["Speed", D.ms_per_image.toFixed(0) + " ms / image"],
+  ].map(([k, v]) => `<div class="card stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+}
+
+function cm() {
+  const m = D.summary[document.getElementById("split").value].confusion, L = D.labels;
+  document.getElementById("cm").innerHTML = `<tr><th></th>${L.map(l => `<th>${l}</th>`).join("")}<th>recall</th></tr>` +
+    m.map((row, i) => `<tr><th>${L[i]}</th>${row.map((v, j) => `<td class="${i === j ? "diag" : ""}">${v}</td>`).join("")}
+      <td class="muted">${pct(row[i] / Math.max(1, row.reduce((a, b) => a + b, 0)))}</td></tr>`).join("");
+}
+
+function thumbs() {
+  const c = document.getElementById("fClass").value, r = document.getElementById("fRes").value;
+  const list = D.images.map((im, i) => ({ ...im, i })).filter(im =>
+    (!c || im.kaggle === c) && (!r || (r === "wrong") === (im.true !== im.pred)));
+  document.getElementById("count").textContent = `${Math.min(shown, list.length)} of ${list.length}`;
+  document.getElementById("more").hidden = shown >= list.length;
+  document.getElementById("thumbs").innerHTML = list.slice(0, shown).map(im => `
+    <div class="t" onclick="openImg(${im.i})">
+      <img loading="lazy" src="/api/dataset/image/${im.i}?size=240" class="${im.true !== im.pred ? "wrong" : ""}" alt="${esc(im.path)}">
+      <div style="margin-top:4px">${chip(im.pred)} <span class="muted">true: ${esc(im.true)}</span></div>
+    </div>`).join("");
+}
+
+function openImg(i) {
+  const im = D.images[i];
+  document.getElementById("mTitle").textContent = im.path;
+  document.getElementById("mRaw").src = `/api/dataset/image/${i}`;
+  document.getElementById("mOv").src = `/api/dataset/image/${i}?kind=overlay`;
+  document.getElementById("mInfo").innerHTML = `True: <b>${esc(im.true)}</b> · Predicted: ${chip(im.pred)} · ${esc(im.reason)} · split: ${im.split}`;
+  document.getElementById("modal").classList.add("show");
+}
+
+(async () => {
+  try { D = await api("/api/dataset"); }
+  catch (e) { document.querySelector("main").innerHTML = `<div class="card">⚠ ${esc(e.message)}</div>`; return; }
+  document.getElementById("fClass").innerHTML += [...new Set(D.images.map(i => i.kaggle))].map(k => `<option>${esc(k)}</option>`).join("");
+  stats(); cm(); thumbs();
+  document.getElementById("split").onchange = cm;
+  document.getElementById("fClass").onchange = document.getElementById("fRes").onchange = () => { shown = 48; thumbs(); };
+  document.getElementById("more").onclick = () => { shown += 48; thumbs(); };
+})();
+</script>
+</body>
+</html>

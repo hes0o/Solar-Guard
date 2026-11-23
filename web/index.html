@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SolarGuard — Manager</title>
+<link rel="stylesheet" href="/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="/common.js"></script>
+</head>
+<body>
+<main>
+  <div class="stats">
+    <div class="card stat"><div class="k">Simulated time</div><div class="v" id="time">–</div></div>
+    <div class="card stat"><div class="k">Sunlight</div><div class="v" id="irr">–</div></div>
+    <div class="card stat"><div class="k">Array power now</div><div class="v" id="power">–</div></div>
+    <div class="card stat"><div class="k">Energy lost to dirt</div><div class="v" id="lost">–</div></div>
+    <div class="card stat"><div class="k">Money lost</div><div class="v" id="money">–</div></div>
+    <div class="card stat"><div class="k">Mode</div>
+      <div class="seg" style="margin-top:6px"><button data-mode="manual">Manual</button><button data-mode="auto">Auto</button></div>
+    </div>
+  </div>
+
+  <h2>Panels <span class="muted" style="text-transform:none;letter-spacing:0">— click an image to toggle the image-processing overlay (red = dirt, green = panel ROI)</span></h2>
+  <div class="grid" id="panels"></div>
+
+  <div class="two" style="margin-top:6px">
+    <div>
+      <h2>Waiting for your approval</h2>
+      <div class="card" id="suggested"></div>
+      <h2>History — <select id="histPanel"></select></h2>
+      <div class="card"><canvas id="chart" height="110"></canvas></div>
+    </div>
+    <div>
+      <h2>Notifications</h2>
+      <div class="card" id="notes"></div>
+      <h2>Settings</h2>
+      <form class="card" id="settings">
+        <table>
+          <tr><td>Readings in a row (K)</td><td><input name="k" type="number" min="1" style="width:80px"></td></tr>
+          <tr><td>Cooldown (sim hours)</td><td><input name="cooldown_hours" type="number" min="1" style="width:80px"></td></tr>
+          <tr><td>Sim minutes per tick</td><td><input name="minutes_per_tick" type="number" min="1" style="width:80px"></td></tr>
+          <tr><td>Real seconds per tick</td><td><input name="tick_seconds" type="number" min="0.5" step="0.5" style="width:80px"></td></tr>
+          <tr><td>Electricity price (₺/kWh)</td><td><input name="price_tl_kwh" type="number" min="0.1" step="0.1" style="width:80px"></td></tr>
+        </table>
+        <button class="primary" style="margin-top:10px">Save</button>
+      </form>
+    </div>
+  </div>
+
+  <h2>All tasks</h2>
+  <div class="card"><table id="tasks"></table></div>
+</main>
+
+<script>
+renderNav(`<span class="bell">🔔<span class="n" id="bell" hidden></span></span>`);
+const overlayOn = new Set();
+let S = null, chart = null, settingsFilled = false;
+
+function card(p) {
+  return `<div class="card panel" id="card-${p.id}">
+    <div class="head"><span class="id">${p.id}</span><span class="lab"></span></div>
+    <img alt="${p.id} camera frame" onclick="toggleOverlay('${p.id}')">
+    <div class="row"><span>Dirt (measured)</span><b class="dirt"></b></div>
+    <div class="row"><span>Soiling (true, sim)</span><b class="soil"></b></div>
+    <div class="row"><span>Power</span><b class="pw"></b></div>
+    <div class="row"><span>Streak / task</span><b class="task"></b></div>
+    <div class="reason"></div>
+    <div class="row-flex" style="margin-top:8px">
+      <button onclick="act(()=>post('/api/demo/dirty/${p.id}?kind=dust').then(()=>toast('${p.id} got dusty')))">Demo: dust</button>
+      <button onclick="act(()=>post('/api/demo/dirty/${p.id}?kind=birds').then(()=>toast('Birds visited ${p.id}')))">Demo: birds</button>
+    </div>
+  </div>`;
+}
+
+function toggleOverlay(id) { overlayOn.has(id) ? overlayOn.delete(id) : overlayOn.add(id); refreshImg(id); }
+function refreshImg(id) {
+  const kind = overlayOn.has(id) ? "overlay" : "raw";
+  document.querySelector(`#card-${id} img`).src = `/api/frame/${id}?kind=${kind}&t=${Date.now()}`;
+}
+
+function render() {
+  const grid = document.getElementById("panels");
+  if (!grid.children.length) {
+    grid.innerHTML = S.panels.map(card).join("");
+    document.getElementById("histPanel").innerHTML = S.panels.map(p => `<option>${p.id}</option>`).join("");
+  }
+  const price = S.settings.price_tl_kwh;
+  let total = 0, lost = 0;
+  for (const p of S.panels) {
+    const el = document.getElementById("card-" + p.id);
+    el.querySelector(".lab").innerHTML = chip(p.label);
+    el.querySelector(".dirt").textContent = pct(p.dirt);
+    el.querySelector(".soil").textContent = pct(p.soiling);
+    el.querySelector(".pw").textContent = p.power.toFixed(0) + " W";
+    el.querySelector(".task").innerHTML = `${p.streak}× · ` +
+      (p.task ? `<span class="status-${p.task.status}">${p.task.kind} ${p.task.status}</span>` : "no task");
+    el.querySelector(".reason").textContent = p.reason || "";
+    refreshImg(p.id);
+    total += p.power; lost += p.lost_kwh;
+  }
+  document.getElementById("time").textContent = S.time.slice(5);
+  document.getElementById("irr").textContent = pct(S.panels[0]?.irr);
+  document.getElementById("power").textContent = (total / 1000).toFixed(2) + " kW";
+  document.getElementById("lost").textContent = lost.toFixed(2) + " kWh";
+  document.getElementById("money").textContent = (lost * price).toFixed(2) + " ₺";
+  document.querySelectorAll("[data-mode]").forEach(b => b.classList.toggle("on", b.dataset.mode === S.settings.mode));
+
+  const sug = S.tasks.filter(t => t.status === "suggested");
+  setHTML("suggested", sug.length ? `<table>${sug.map(t => `<tr>
+      <td><b>${t.panel}</b> · ${t.kind}<div class="muted">${esc(t.reason)}</div></td>
+      <td style="white-space:nowrap"><button class="primary" onclick="act(()=>post('/api/tasks/${t.id}/approve').then(load))">Send cleaning team</button>
+      <button class="danger" onclick="act(()=>post('/api/tasks/${t.id}/reject').then(load))">Reject</button></td></tr>`).join("")}</table>`
+    : `<span class="muted">Nothing to approve${S.settings.mode === "auto" ? " — Auto mode sends tasks straight to staff" : ""}.</span>`);
+
+  setHTML("notes", S.notifications.manager.length
+    ? S.notifications.manager.slice(0, 8).map(n => `<div style="margin-bottom:6px">${n.read ? "" : "● "}<span class="muted">${n.t.slice(5)}</span> ${esc(n.text)}</div>`).join("")
+    : `<span class="muted">No notifications.</span>`);
+  const bell = document.getElementById("bell");
+  bell.hidden = !S.unread.manager; bell.textContent = S.unread.manager;
+
+  setHTML("tasks", `<tr><th>#</th><th>Panel</th><th>Type</th><th>Status</th><th>Created</th><th>Reason</th></tr>` +
+    S.tasks.map(t => `<tr><td>${t.id}</td><td>${t.panel}</td><td>${t.kind}</td><td class="status-${t.status}">${t.status}</td>
+      <td class="muted">${t.created.slice(5)}</td><td class="muted">${esc(t.reason)}</td></tr>`).join(""));
+
+  if (!settingsFilled) {
+    const f = document.getElementById("settings");
+    for (const [k, v] of Object.entries(S.settings)) if (f.elements[k]) f.elements[k].value = v;
+    settingsFilled = true;
+  }
+}
+
+async function drawHistory() {
+  const id = document.getElementById("histPanel").value;
+  if (!id) return;
+  const h = await api(`/api/history/${id}`);
+  const data = {
+    labels: h.map(r => r.t.slice(5)),
+    datasets: [
+      { label: "Power (W)", data: h.map(r => r.power), borderColor: "#f5b93b", yAxisID: "y", pointRadius: 0, tension: .3 },
+      { label: "Dirt measured (%)", data: h.map(r => r.dirt * 100), borderColor: "#ef5b5b", yAxisID: "y1", pointRadius: 0 },
+      { label: "Soiling true (%)", data: h.map(r => r.soiling * 100), borderColor: "#5aa9f5", yAxisID: "y1", pointRadius: 0, borderDash: [4, 4] },
+    ],
+  };
+  if (chart) { chart.data = data; chart.update("none"); return; }
+  chart = new Chart(document.getElementById("chart"), {
+    type: "line", data,
+    options: { animation: false, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { labels: { color: "#8b98b0" } } },
+      scales: { x: { ticks: { color: "#8b98b0", maxTicksLimit: 8 }, grid: { color: "#26324a" } },
+        y: { position: "left", ticks: { color: "#8b98b0" }, grid: { color: "#26324a" }, title: { display: true, text: "W", color: "#8b98b0" } },
+        y1: { position: "right", min: 0, max: 100, ticks: { color: "#8b98b0" }, grid: { display: false }, title: { display: true, text: "%", color: "#8b98b0" } } } },
+  });
+}
+
+async function load() {
+  try { S = await api("/api/state"); render(); drawHistory(); } catch (e) { toast("⚠ " + e.message); }
+}
+
+document.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => act(async () => {
+  await post("/api/settings", { mode: b.dataset.mode }); toast("Mode: " + b.dataset.mode); load();
+}));
+document.getElementById("histPanel").onchange = drawHistory;
+document.getElementById("settings").onsubmit = e => {
+  e.preventDefault();
+  const body = Object.fromEntries(new FormData(e.target));
+  act(async () => { await post("/api/settings", body); toast("Settings saved"); load(); });
+};
+document.querySelector(".bell").onclick = () => act(async () => { await post("/api/notifications/manager/read"); load(); });
+load();
+setInterval(load, 2000);
+</script>
+</body>
+</html>

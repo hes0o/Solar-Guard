@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SolarGuard — Staff</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/common.js"></script>
+</head>
+<body>
+<main>
+  <div class="two">
+    <div>
+      <h2>My tasks</h2>
+      <div class="grid" id="tasks"></div>
+    </div>
+    <div>
+      <h2>Notifications <button id="readAll" style="margin-left:8px">Mark all read</button></h2>
+      <div class="card" id="notes"></div>
+    </div>
+  </div>
+</main>
+<script>
+renderNav(`<span class="bell">🔔<span class="n" id="bell" hidden></span></span> <span class="muted">Sim time: <b id="time"></b></span>`);
+const NEXT = { new: ["start", "Start cleaning"], started: ["done", "Mark done"] };
+
+async function load() {
+  try {
+    const S = await api("/api/state");
+    document.getElementById("time").textContent = S.time.slice(5);
+    const mine = S.tasks.filter(t => t.status === "new" || t.status === "started");
+    setHTML("tasks", mine.length ? mine.map(t => {
+      const [action, text] = NEXT[t.status];
+      const verb = t.kind === "inspection" ? text.replace("cleaning", "inspection") : text;
+      return `<div class="card panel">
+        <div class="head"><span class="id">${t.panel}</span><span class="status-${t.status}">${t.kind} · ${t.status}</span></div>
+        <img src="/api/frame/${t.panel}?kind=overlay&t=${encodeURIComponent(t.updated)}" alt="${t.panel} with dirt overlay">
+        <div class="reason">${esc(t.reason)}</div>
+        <button class="primary" onclick="act(()=>post('/api/tasks/${t.id}/${action}').then(load))">${verb}</button>
+      </div>`;
+    }).join("") : `<div class="card muted">No open tasks. 🎉</div>`);
+    setHTML("notes", S.notifications.staff.length
+      ? S.notifications.staff.map(n => `<div style="margin-bottom:6px">${n.read ? "" : "● "}<span class="muted">${n.t.slice(5)}</span> ${esc(n.text)}</div>`).join("")
+      : `<span class="muted">No notifications.</span>`);
+    const bell = document.getElementById("bell");
+    bell.hidden = !S.unread.staff; bell.textContent = S.unread.staff;
+  } catch (e) { toast("⚠ " + e.message); }
+}
+document.getElementById("readAll").onclick = () => act(async () => { await post("/api/notifications/staff/read"); load(); });
+load();
+setInterval(load, 3000);
+</script>
+</body>
+</html>

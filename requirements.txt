@@ -1,4 +1,8 @@
 opencv-python-headless
 numpy
 kagglehub
+fastapi
+uvicorn
+python-multipart
 pytest
+httpx
