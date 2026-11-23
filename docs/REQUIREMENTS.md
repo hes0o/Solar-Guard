@@ -46,7 +46,7 @@ Both modes call the same `analyze(image) -> result` function.
 ## 5. Functional requirements
 
 ### Image-processing core
-- **FR1** Panel detection & perspective correction (grayscale → blur → Canny → largest quadrilateral contour → warp). Fallback: whole image if no quad found.
+- **FR1** Panel localization: colour (blue / dark / grey cells, HSV) + texture (local std from grid lines) → morphology → large regions → convex hull, so dirt on the panel stays inside the ROI. (Dataset images are angled array shots, so a single-quad perspective warp was dropped.) Fallback: whole image if coverage < 10%.
 - **FR2** Preprocessing: resize, CLAHE, denoise, glare/specular mask.
 - **FR3** Dirt segmentation (HSV/Lab thresholds, Otsu/adaptive threshold, morphology) → mask + **dirt %**.
 - **FR4** Feature extraction: color stats, GLCM texture, edge density, white-blob count/size.
