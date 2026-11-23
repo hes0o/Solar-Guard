@@ -72,7 +72,7 @@ Both modes call the same `analyze(image) -> result` function.
 
 ## 6. Non-functional requirements
 
-- **NFR1** Runs on a weak server: images resized to ≤ 640 px, target < 300 ms per image on 1 vCPU, < 512 MB RAM.
+- **NFR1** Runs on the project server (Pentium E5300, 2 cores, no AVX, ~1.3 GB free RAM): images resized to ≤ 640 px, GLCM on a 256 px / 32-level copy, target < 1 s per image, single worker, < 512 MB RAM. The Dataset Mode batch may run on Colab/laptop and its results be uploaded.
 - **NFR2** One process: web server + simulation loop + SQLite. No external services.
 - **NFR3** Each pipeline step is a pure function, testable and visualizable on its own.
 - **NFR4** Dashboard refreshes live (polling every few seconds).
